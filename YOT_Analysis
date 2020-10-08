@@ -1,0 +1,1204 @@
+source('F:/GtD anal/GtDAnal_nofont.R')
+
+library(dplyr)
+library(lubridate)
+library(openxlsx)
+library(stringr)
+library(MatchIt)
+library(sqldf)
+library(questionr)
+library(rmeta)
+library(forestplot)
+
+#### YOT compliance data
+
+set_path <- 'F:/Asset Plus/Data/YOT_Data/'
+
+## load 
+x <- 1
+Rem <- list()
+
+YOTs <- list.files(set_path)
+YOTs <- YOTs[-which(YOTs == 'Hampshire')]
+
+for (i in YOTs)
+{
+  sub_path <- paste0(set_path, i, '/')
+  
+  for (j in list.files(sub_path))
+  {
+    
+    Rem[[x]] <- read.csv(file = paste0(sub_path, j), strip.white = T, stringsAsFactors = F)
+    Rem[[x]]$YOT <- i
+    x <- x + 1
+    
+  }
+}
+
+## aggregate
+Contacts <- bind_rows(Rem[[1]], Rem[[4]], Rem[[7]], Rem[[10]], Rem[[13]], Rem[[16]], Rem[[19]], Rem[[22]])
+Contacts$Start.Time <- NULL
+Interventions <- bind_rows(Rem[[2]], Rem[[5]], Rem[[8]], Rem[[11]], Rem[[14]], Rem[[17]], Rem[[20]], Rem[[23]])
+Interventions$Agency.Responsible <- NULL
+Referrals <- bind_rows(Rem[[3]], Rem[[6]], Rem[[9]], Rem[[12]], Rem[[15]],  Rem[[18]], Rem[[21]], Rem[[24]])
+
+## clean up dates
+Contacts$Contact.Date <- dmy(Contacts$Contact.Date)
+
+Interventions$Start.Date <- dmy(Interventions$Start.Date)
+Interventions$End.Date <- dmy(Interventions$End.Date)
+Interventions$Offence.Date <- dmy(Interventions$Offence.Date)
+
+Referrals$Referral.Date <- dmy(Referrals$Referral.Date)
+Referrals$Date.Last.Outcome <- dmy(Referrals$Date.Last.Outcome)
+
+## add Hants
+Hants_Int <- read.xlsx(paste0(set_path, '/Hampshire/Hampshire_AssetPlus_evaluation.xlsx')
+                       , sheet = 'Raw Data - Interventions')
+Hants_Int$Offence.Date <- convertToDate(Hants_Int$Offence.Date)
+Hants_Int$Intervention.Start.Date <- convertToDate(Hants_Int$Intervention.Start.Date)
+Hants_Int$Intervention.End <- convertToDate(Hants_Int$Intervention.End)
+Hants_Int$Hearing.Date <- convertToDate(Hants_Int$Hearing.Date)
+
+Hants_Int$Hearing.Date <- if_else(Hants_Int$Hearing.Date == '1899-12-30'
+                                 ,Hants_Int$Intervention.Start.Date, Hants_Int$Hearing.Date)
+
+Hants_Con <- read.xlsx(paste0(set_path, '/Hampshire/Hampshire_AssetPlus_evaluation.xlsx')
+                       , sheet = 'Raw Data - Events')
+Hants_Con$Date <- convertToDate(Hants_Con$Date)
+Hants_Con$Intervention.Start <- dmy(Hants_Con$Intervention.Start)
+Hants_Con$Intervention.End <- dmy(Hants_Con$Intervention.End)
+
+Hants_Con$YOT <- 'Hampshire'
+Hants_Int$YOT <- 'Hampshire'
+
+names(Hants_Con)[which(names(Hants_Con) == 'Person_ID')] <- 'Child.ID'
+names(Hants_Con)[which(names(Hants_Con) == 'Event.Type')] <- 'Contact.Type'
+names(Hants_Con)[which(names(Hants_Con) == 'Date')] <- 'Contact.Date'
+names(Hants_Con)[which(names(Hants_Con) == 'Attended')] <- 'Status'
+names(Hants_Con)[which(names(Hants_Con) == 'IDCLIENTYJCASEEVENT')] <- 'Contact.ID'
+names(Hants_Con)[which(names(Hants_Con) == 'Duration.(decimal)')] <- 'Duration'
+
+Contacts <- rbind(Contacts, Hants_Con[, names(Contacts)])
+
+names(Hants_Int)[which(names(Hants_Int) == 'Person_ID')] <- 'Child.ID'
+names(Hants_Int)[which(names(Hants_Int) == 'Event.Type')] <- 'Contact.Type'
+names(Hants_Int)[which(names(Hants_Int) == 'Programme.Outcome')] <- 'Main.Outcome'
+names(Hants_Int)[which(names(Hants_Int) == 'Intervention_ID')] <- 'Intervention.ID'
+names(Hants_Int)[which(names(Hants_Int) == 'Hearing.Date')] <- 'Start.Date'
+names(Hants_Int)[which(names(Hants_Int) == 'Intervention.End')] <- 'End.Date'
+names(Hants_Int)[which(names(Hants_Int) == 'Offence.Category')] <- 'Index.Offence'
+names(Hants_Int)[which(names(Hants_Int) == 'Intervention.End')] <- 'End.Date'
+
+Interventions <- rbind(Interventions, Hants_Int[, names(Interventions)])
+
+#####################################################################################################
+## clean 
+Contacts$Contact.Type <- gsub('~~ ', '', Contacts$Contact.Type)
+Contacts$Contact.Type <- gsub(' ~~', '', Contacts$Contact.Type)
+Contacts$Contact.Type <- gsub('UnScheduled', 'Unscheduled', Contacts$Contact.Type)
+Contacts$Contact.Type <- gsub('\\...', '', Contacts$Contact.Type)
+Contacts$Contact.Type <- str_trim(Contacts$Contact.Type)
+
+Contacts$Status <- gsub('~~ ', '', Contacts$Status)
+Contacts$Status <- gsub(' ~~', '', Contacts$Status)
+
+Interventions$Main.Outcome[is.na(Interventions$Main.Outcome)] <- ''
+Interventions$Intervention.Type[is.na(Interventions$Intervention.Type)] <- ''
+Interventions$Intervention.Type <- gsub(' ~~', '', Interventions$Intervention.Type)
+Interventions$Intervention.Type <- gsub('~~ ', '', Interventions$Intervention.Type)
+nterventions <- Interventions[!is.na(Interventions$Intervention.ID), ]
+
+contact_types <- data.frame(table(Contacts$Contact.Type))
+table(Contacts$Contact.Type, Contacts$YOT)
+
+contact_status <- data.frame(table(Contacts$Status))
+table(Contacts$Status, Contacts$YOT)
+
+intervention_out <- data.frame(table(Interventions$Main.Outcome))
+table(Interventions$Main.Outcome, Interventions$YOT)
+
+intervention_type <- data.frame(table(Interventions$Intervention.Type))
+table(Interventions$Intervention.Type, Interventions$YOT)
+
+referral_types <- table(Referrals$Referral.Category)
+table(Referrals$Referral.Category, Referrals$YOT)
+
+referral_outcomes <- data.frame(table(Referrals$Last.Outcome))
+table(Referrals$Last.Outcome, Referrals$YOT)
+
+write.csv(contact_types, file = paste0(set_path, 'CleanContacts.csv'))
+write.csv(contact_status, file = paste0(set_path, 'ContactsStatus.csv'))
+write.csv(intervention_out, file = paste0(set_path, 'IntType.csv'))
+write.csv(intervention_type, file = paste0(set_path, 'IntClass.csv'))
+write.csv(referral_outcomes, file = paste0(set_path, 'ReferallOut.csv'))
+
+### define which contacts are the ones using external lookup
+## contacts
+Con_use <- read.csv(file = 'F:/Asset Plus/Data/YOT_Data/Contacts_lkup.csv', strip.white = T, stringsAsFactors = F)
+Con_use$Var1 <- str_trim(Con_use$Var1)
+nrow(Con_use); nrow(contact_types) # check if more coding needed
+
+Contacts <- merge(Contacts, Con_use, by.x = 'Contact.Type', by.y = 'Var1', all.x = T)
+prop.table(table(Contacts$YOT, Contacts$Face.to.Face), 1)
+
+Con_stat <- read.csv(file = 'F:/Asset Plus/Data/YOT_Data/Status_lkup.csv', strip.white = T, stringsAsFactors = F)
+Con_stat$Var1 <- str_trim(Con_stat$Var1)
+nrow(Con_stat); nrow(contact_status) # check if more coding needed
+
+Contacts <- merge(Contacts, Con_stat, by.x = 'Status', by.y = 'Var1', all.x = T)
+prop.table(table(Contacts$YOT, Contacts$Complied), 1)
+
+## successful interventions
+Int_out <- read.csv(file = 'F:/Asset Plus/Data/YOT_Data/Intervention_lkup.csv', strip.white = T, stringsAsFactors = F)
+Int_out$Var1 <- str_trim(Int_out$Var1)
+nrow(Int_out); nrow(intervention_out) # check if more coding needed
+
+Interventions <- merge(Interventions, Int_out, by.x = 'Main.Outcome', by.y = 'Var1', all.x = T)
+prop.table(table(Interventions$YOT, Interventions$Complete), 1)
+
+Int_type <- read.csv(file = 'F:/Asset Plus/Data/YOT_Data/Intervention_class.csv', strip.white = T, stringsAsFactors = F)
+Int_type$Var1 <- str_trim(Int_type$Var1)
+nrow(Int_type); nrow(intervention_type) # check if more coding needed
+
+Interventions <- merge(Interventions, Int_type, by.x = 'Intervention.Type', by.y = 'Var1', all.x = T)
+prop.table(table(Interventions$YOT, Interventions$Main), 1)
+
+## referral tyoes and outcomes
+Ref_out <- read.csv(file = 'F:/Asset Plus/Data/YOT_Data/Referral_Outcome_lkup.csv', strip.white = T, stringsAsFactors = F)
+Ref_out$Var1 <- str_trim(Ref_out$Var1)
+nrow(Ref_out); nrow(referral_outcomes) # check if more coding needed
+
+Referrals <- merge(Referrals, Ref_out, by.x = 'Last.Outcome', by.y = 'Var1', all.x = T)
+prop.table(table(Referrals$YOT, Referrals$Complied), 1)
+
+#####################################################################################################
+## load YJB commencement data
+source('F:/Asset Plus/Data/Load_sample.R')
+
+Inc_yots <- c('West Mercia', 'South Tees', 'Carmarthenshire', 'Bedfordshire', 'Norfolk'
+              , 'Bath and North East Somerset', 'Hampshire', 'Enfield', 'Manchester')
+
+dataset$yot_name <- ifelse(dataset$yot_name == 'Worcestershire and Herefordshire' | dataset$yot_name == 'Shropshire, Telford and Wrekin'
+                           , 'West Mercia', dataset$yot_name)
+## add SS to all south tees 
+dataset$currentyotid <- ifelse(dataset$yot_name == 'South Tees' & !endsWith(dataset$currentyotid, 'SS')
+                            , paste0(dataset$currentyotid, 'SS'), dataset$currentyotid)
+
+Data <- dataset[dataset$yot_name %in% Inc_yots, ]
+
+if(is.null(Data$StartDate)){
+  Data$StartDate <- if_else(Data$release_date == '1970-01-01', Data$commencement_date, Data$release_date)
+}
+Data$Caution <- Data$Conditional.Caution <- Data$Custodial <- Data$Order <- Data$Other <- NULL
+Data$residence_on_sentence_date <- Data$termination_reason <- Data$yogrs <- NULL
+
+Data$offence_seriousness_score <-  as.numeric(Data$offence_seriousness_score)
+
+YP <- c('gender' ,'Sentence','age_at_commencement','number_of_previous_cautions','number_of_previous_orders','offence_seriousness_score','knife_related_offence'
+        ,'ARSON','CRIMINAL_DAMAGE','DEATH_OR_INJURY_BY_DANGEROUS_DRIVING','DOMESTIC_BURGLARY','DRUGS','FRAUD_AND_FORGERY','MOTORING_OFFENCES','NON_DOMESTIC_BURGLARY',
+        'NOT_KNOWN','PUBLIC_ORDER','RACIALLY_AGGRAVATED','ROBBERY','SEXUAL_OFFENCES','THEFT_AND_HANDLING_STOLEN_GOODS','VEHICLE_THEFT_UNAUTHORISED_TAKING','VIOLENCE_AGAINST_THE_PERSON',
+        "Asian.or.Asian.British", 'Black.or.Black.British', 'Chinese.or.Other.Ethnic.Group',"Information.not.obtainable", "Mixed", "Other.Ethnic.Group", "Unknown.Ethnicity")
+
+YPcols <-  paste(YP, collapse = ' + ')
+
+dataset_filt <- Data[, c('RecID', 'currentyotid', 'commencement_date', 'StartDate', 'Assessment'
+                         , 'OrderEndDate', 'Length', YP, 'yot_name')]
+
+## only use those who exist in YOT intervention data
+main_int <- unique(Interventions[Interventions$Main == 1
+                                 , c('Child.ID', 'Start.Date', 'End.Date', 'Int_Cat', 'Complete')])
+
+## select complete where both exist
+main_int <- main_int %>% group_by(Child.ID, Start.Date, Int_Cat) %>%
+  summarise(End.Date = max(End.Date), Complete = max(Complete))
+
+dataset_matchA <- merge(dataset_filt, main_int
+                      , by.x = c('currentyotid', 'commencement_date', 'Sentence')
+                      , by.y = c('Child.ID', 'Start.Date', 'Int_Cat'))
+
+## get those not matched on exact dates and try again with a range
+Int_link2 <- main_int
+colnames(Int_link2) <- gsub('\\.', '_', colnames(Int_link2))
+
+day_range <- 90
+
+if(day_range > 0) {
+
+  Int_link2$Start_DateA <- Int_link2$Start_Date - (day_range / 3)
+  Int_link2$Start_DateB <- Int_link2$Start_Date + day_range
+  
+ extra_SQL <- 'SELECT c.*, i.End_Date, i.Complete
+                  FROM dataset_filt c
+                  LEFT JOIN Int_link2 i
+                  ON c.currentyotid = i.Child_ID AND c.Sentence = i.Int_Cat
+                  WHERE c.commencement_date BETWEEN i.Start_DateA AND i.Start_DateB
+                  AND c.commencement_date <> i.Start_Date
+                  GROUP BY c.currentyotid, c.commencement_date'
+  
+  Extra_match <- sqldf(extra_SQL)
+  names(Extra_match)[which(names(Extra_match) == 'End_Date')] <- 'End.Date'
+  Extra_match <- Extra_match[!Extra_match$RecID %in% dataset_matchA$RecID, ]
+  dataset_filt <- rbind(dataset_matchA, Extra_match)
+} else {
+  
+  dataset_filt <- dataset_matchA
+}
+
+#####################################################################################################
+## add in YOT data ###############################################################
+## inteventions counted and completed during order
+Int_link <- unique(Interventions[Interventions$Main == 0, c('Child.ID', 'Start.Date', 'Complete')])
+colnames(Int_link) <- gsub('\\.', '_', colnames(Int_link))
+dataset_filt$End.Date <- if_else(is.na(dataset_filt$End.Date) & dataset_filt$OrderEndDate != '1970-01-01'
+                                 ,dataset_filt$OrderEndDate, dataset_filt$End.Date)
+dataset_filt$Bef <- dataset_filt$StartDate - 30
+dataset_filt$Aft <- dataset_filt$End.Date + 90
+
+SQL_int <- 'SELECT c.currentyotid, c.StartDate, max(i.Complete) AS Int_comp
+            ,Sum(CASE WHEN i.Complete = 1 THEN 1 ELSE 0 END) AS Int_count
+            ,Sum(CASE WHEN i.Complete = 0 THEN 1 ELSE 0 END) AS Int_Nocount
+            FROM dataset_filt c
+            LEFT JOIN Int_link i
+            ON c.currentyotid = i.Child_ID
+            WHERE i.Start_Date BETWEEN c.Bef AND c.Aft
+            GROUP BY c.currentyotid, c.StartDate'
+
+Int_comp <- sqldf(SQL_int)
+
+## contacts counted and attended during order
+Con_link <- unique(Contacts[, c('Child.ID', 'Contact.Date', 'Face.to.Face', 'Complied')])
+colnames(Con_link) <- gsub('\\.', '_', colnames(Con_link))
+
+Con_link$Contact_Date_1M <- Con_link$Contact_Date  %m-% months(1)
+Con_link$Contact_Date_2M <- Con_link$Contact_Date  %m-% months(2)
+Con_link$Contact_Date_3M <- Con_link$Contact_Date  %m-% months(3)
+
+SQL_con <- 'SELECT c.currentyotid, c.StartDate
+          , max(CASE WHEN i.Complied = 1 AND i.Face_to_Face = 1 THEN 1 ELSE 0 END) AS FF_comp
+          , Sum(CASE WHEN i.Complied = 1 AND i.Face_to_Face = 1 THEN 1 ELSE 0 END) AS FF_count
+          , Sum(CASE WHEN i.Complied = 0 AND i.Face_to_Face = 1 THEN 1 ELSE 0 END) AS FF_Nocount
+          , max(CASE WHEN i.Complied = 1 AND i.Face_to_Face = 0 THEN 1 ELSE 0 END) AS Rem_comp
+          , Sum(CASE WHEN i.Complied = 1 AND i.Face_to_Face = 0 THEN 1 ELSE 0 END) AS Rem_count
+          , Sum(CASE WHEN i.Complied = 0 AND i.Face_to_Face = 0 THEN 1 ELSE 0 END) AS Rem_Nocount
+          , max(CASE WHEN i.Complied = 0 AND i.Contact_Date_1M <= c.StartDate AND i.Face_to_Face = 1 THEN 1 ELSE 0 END) AS NoComp_1
+          , max(CASE WHEN i.Complied = 0 AND i.Contact_Date_2M <= c.StartDate AND i.Face_to_Face = 1 THEN 1 ELSE 0 END) AS NoComp_2
+          , max(CASE WHEN i.Complied = 0 AND i.Contact_Date_3M <= c.StartDate AND i.Face_to_Face = 1 THEN 1 ELSE 0 END) AS NoComp_3
+          FROM dataset_filt c
+          LEFT JOIN Con_link i
+          ON c.currentyotid = i.Child_ID
+          WHERE i.Contact_Date BETWEEN c.Bef AND c.Aft
+          GROUP BY c.currentyotid, c.StartDate'
+
+Con_comp <- sqldf(SQL_con)
+
+## referrals counted and attended during order
+Ref_link <- unique(Referrals[, c('Child.ID', 'Referral.Date', 'Complied')])
+colnames(Ref_link) <- gsub('\\.', '_', colnames(Ref_link))
+
+SQL_ref <- 'SELECT c.currentyotid, c.StartDate
+            , max(CASE WHEN i.Complied = 1 THEN 1 ELSE 0 END) AS Ref_comp
+            , Sum(CASE WHEN i.Complied = 1 THEN 1 ELSE 0 END) AS Ref_count
+            , Sum(CASE WHEN i.Complied = 0 THEN 1 ELSE 0 END) AS Ref_Nocount
+            FROM dataset_filt c
+            LEFT JOIN Ref_link i
+            ON c.currentyotid = i.Child_ID
+            WHERE i.Referral_Date BETWEEN c.Bef AND c.Aft
+            GROUP BY c.currentyotid, c.StartDate'
+
+Ref_comp <- sqldf(SQL_ref)
+
+## join it all together
+dataset_filt <- merge(dataset_filt, Int_comp, by = c('StartDate', 'currentyotid'), all.x = T)
+dataset_filt$Other_Int_Total <- dataset_filt$Int_count + dataset_filt$Int_Nocount
+dataset_filt$Int_comp[is.na(dataset_filt$Int_comp)] <- -1
+dataset_filt$Int_count[is.na(dataset_filt$Int_count)] <- 0
+dataset_filt$Int_Nocount[is.na(dataset_filt$Int_Nocount)] <- 0
+dataset_filt$Other_Int_Total[is.na(dataset_filt$Other_Int_Total)] <- 0
+
+dataset_filt <- merge(dataset_filt, Con_comp, by = c('StartDate', 'currentyotid'), all.x = T)
+dataset_filt$FF_comp[is.na(dataset_filt$FF_comp)] <- -1
+dataset_filt$FF_count[is.na(dataset_filt$FF_count)] <- 0
+dataset_filt$FF_Nocount[is.na(dataset_filt$FF_Nocount)] <- 0
+dataset_filt$Rem_comp[is.na(dataset_filt$Rem_comp)] <- 0
+dataset_filt$Rem_count[is.na(dataset_filt$Rem_count)] <- 0
+dataset_filt$Rem_Nocount[is.na(dataset_filt$Rem_Nocount)] <- 0
+dataset_filt$NoComp_1[is.na(dataset_filt$NoComp_1)] <- 0
+dataset_filt$NoComp_2[is.na(dataset_filt$NoComp_2)] <- 0
+dataset_filt$NoComp_3[is.na(dataset_filt$NoComp_3)] <- 0
+
+dataset_filt <- merge(dataset_filt, Ref_comp, by = c('StartDate', 'currentyotid'), all.x = T)
+dataset_filt$Ref_comp[is.na(dataset_filt$Ref_comp)] <- -1
+dataset_filt$Ref_count[is.na(dataset_filt$Ref_count)] <- 0
+dataset_filt$Ref_Nocount[is.na(dataset_filt$Ref_Nocount)] <- 0
+dataset_filt$Ref_All <- dataset_filt$Ref_count + dataset_filt$Ref_Nocount
+
+###### Variables for charts
+dataset_filt$Length <- (dataset_filt$End.Date - dataset_filt$StartDate) / 12
+dataset_filt$Completed <- ifelse(dataset_filt$Complete == 1, 'Completed', 'Not Completed')
+dataset_filt$Asset <- ifelse(dataset_filt$Assessment == 1, 'Asset Plus', 'Control')
+dataset_filt$Other_comp <- ifelse(dataset_filt$Int_comp == 1, 'Completed', 'Not Completed')
+dataset_filt$Len <- ifelse(dataset_filt$Length <= 0, 'Check',
+                    ifelse(dataset_filt$Length <= 1, '1 Month',
+                           ifelse(dataset_filt$Length <= 2, '2 Months',
+                                  ifelse(dataset_filt$Length <= 3, '3 Months',
+                                         ifelse(dataset_filt$Length <= 6, '6 Months',
+                                                ifelse(dataset_filt$Length <= 12, '1 Year',
+                                                       ifelse(dataset_filt$Length <= 24, '2 Years', 'Over 2 years')))))))
+
+dataset_filt$Len <- factor(dataset_filt$Len
+                           , levels = c('Check', '1 Month', '2 Months', '3 Months'
+                                        , '6 Months', '1 Year', '2 Years', 'Over 2 years'))
+dataset_filt$Comp_con <- ifelse(dataset_filt$FF_count == 0, 'None',
+                                ifelse(dataset_filt$FF_count <= 3, '1 - 3',
+                                       ifelse(dataset_filt$FF_count <= 8, '4 - 8',
+                                              ifelse(dataset_filt$FF_count <= 14, '9 - 14',
+                                                     ifelse(dataset_filt$FF_count <= 22, '15 - 22',
+                                                            ifelse(dataset_filt$FF_count <= 33, '23 - 33', '34 or more'))))))
+dataset_filt$Comp_con <- factor(dataset_filt$Comp_con, levels = c('None', '1 - 3', '4 - 8', '9 - 14'
+                                                        ,'15 - 22', '23 - 33', '34 or more'))
+dataset_filt$Comp_Nocon <- ifelse(dataset_filt$FF_Nocount == 0, 'None',
+                                ifelse(dataset_filt$FF_Nocount <= 3, '1 - 3',
+                                       ifelse(dataset_filt$FF_Nocount <= 10, '4 - 10',
+                                              ifelse(dataset_filt$FF_Nocount <= 20, '11 - 20', '21 or more'))))
+dataset_filt$Comp_Nocon <- factor(dataset_filt$Comp_Nocon, levels = c('None', '1 - 3', '4 - 10', '11 - 20', '21 or more'))
+
+dataset_filt$Other_Int_Exist <- ifelse(dataset_filt$Other_Int_Total == 0, 'None', 'Other interventions')
+
+## file end desc
+if(day_range > 0) {
+  
+  title_lab <- paste0('_', day_range, 'days')
+  
+} else {
+  title_lab <- ''
+}
+
+#####################################################################################################
+## DEscriptive charts
+### completion of sentence
+GtDPlot(data.frame(prop.table(table(dataset_filt$Completed))), 'Var1', 'Freq', group = '', facet.wrap = ''
+        , title = 'Proportion of Commencements Completed', labels.text.size = 4, round = 2, xlab = 'Status')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/Completed', title_lab, '.png'), last_plot())
+
+GtDPlot(data.frame(prop.table(table(dataset_filt$Asset, dataset_filt$Completed), 1)), 'Var2', 'Freq', group = '', facet.wrap = 'Var1'
+        , title = 'Proportion of Commencements Completed', labels.text.size = 4, round = 2, xlab = 'Status')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/Completed_Asset', title_lab, '.png'), last_plot())
+
+GtDPlot(data.frame(prop.table(table(dataset_filt$yot_name, dataset_filt$Completed), 1)), 'Var2', 'Freq', group = '', facet.wrap = 'Var1'
+        , title = 'Proportion of Commencements Completed', labels.text.size = 4, round = 2, xlab = 'Status by YOT')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/Completed_yot', title_lab, '.png'), last_plot())
+
+### other inteerventions, existing and completed
+GtDPlot(data.frame(prop.table(table(dataset_filt[dataset_filt$Sentence != 'Caution', 'Other_Int_Total']))), 'Var1', 'Freq', group = '', facet.wrap = ''
+        , title = 'Proportion of Commencements with other Interventions listed', labels.text.size = 4, round = 2, xlab = 'Number of Interventions')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/Other_int', title_lab, '.png'), last_plot())
+
+GtDPlot(data.frame(prop.table(table(dataset_filt$Other_Int_Exist[dataset_filt$Sentence != 'Caution']))), 'Var1', 'Freq', group = '', facet.wrap = ''
+        , title = 'Proportion of Commencements with other Interventions recorded (ex. cautions)', labels.text.size = 4, round = 2, xlab = 'Status')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/other_int_exist', title_lab, '.png'), last_plot())
+
+GtDPlot(data.frame(prop.table(table(dataset_filt$Other_comp[dataset_filt$Sentence != 'Caution']))), 'Var1', 'Freq', group = '', facet.wrap = ''
+        , title = 'Proportion of Commencements Completing other Interventions (ex. cautions)', labels.text.size = 4, round = 2, xlab = 'Status')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/Completed_other', title_lab, '.png'), last_plot())
+
+GtDPlot(data.frame(prop.table(table(dataset_filt$Other_Int_Exist[dataset_filt$Sentence != 'Caution'], dataset_filt$yot_name[dataset_filt$Sentence != 'Caution']), 2)), 'Var1', 'Freq', group = '', facet.wrap = 'Var2'
+        , title = 'Proportion of Commencements with other Interventions listed (ex. cautions)', labels.text.size = 4, round = 2, xlab = 'Status')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/other_int_exist_yot', title_lab, '.png'), last_plot())
+
+GtDPlot(data.frame(prop.table(table(dataset_filt$Other_comp[dataset_filt$Sentence != 'Caution'], dataset_filt$yot_name[dataset_filt$Sentence != 'Caution']), 2)), 'Var1', 'Freq', group = '', facet.wrap = 'Var2'
+        , title = 'Proportion of Commencements Completing other Interventions (ex. cautions)', labels.text.size = 4, round = 2, xlab = 'Status')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/Completed_other_yot', title_lab, '.png'), last_plot())
+
+GtDPlot(data.frame(prop.table(table(dataset_filt$Asset[dataset_filt$Sentence != 'Caution'], dataset_filt$Other_comp[dataset_filt$Sentence != 'Caution']), 1)), 'Var2', 'Freq', group = '', facet.wrap = 'Var1'
+        , title = 'Proportion of Commencements Completing other Interventions (ex. cautions)', labels.text.size = 4, round = 2, xlab = 'Status by group')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/Completed_otherA', title_lab, '.png'), last_plot())
+
+GtDPlot(data.frame(prop.table(table(dataset_filt$Asset[dataset_filt$Sentence != 'Caution'], dataset_filt$Int_count[dataset_filt$Sentence != 'Caution']), 1)), 'Var2', 'Freq', group = '', facet.wrap = 'Var1'
+        , title = 'Proportion of Commencements Completing other Interventions (ex. cautions)', labels.text.size = 4, round = 2, xlab = 'Number of interventions complete')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/Completed_count', title_lab, '.png'), last_plot())
+
+GtDPlot(data.frame(prop.table(table(dataset_filt$Asset[dataset_filt$Sentence != 'Caution'], dataset_filt$Int_Nocount[dataset_filt$Sentence != 'Caution']), 1)), 'Var2', 'Freq', group = '', facet.wrap = 'Var1'
+        , title = 'Proportion of Commencements with other Incomplete Interventions (ex. cautions)', labels.text.size = 4, round = 2, xlab = 'Number of interventions incomplete')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/Completed_nocount', title_lab, '.png'), last_plot())
+
+## contacts and compliacne to them
+GtDPlot(data.frame(prop.table(table(dataset_filt$Len, dataset_filt$FF_comp), 1))[data.frame(prop.table(table(dataset_filt$Len, dataset_filt$FF_comp), 1))$Var2 == 1, ], 'Var1', 'Freq', group = '', facet.wrap = ''
+        , title = 'Proportion of Commencements with at Least One Face to Face Contact Compliance', labels.text.size = 4, round = 2, xlab = 'Length of Sentence')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/LenFFConComp', title_lab, '.png'), last_plot())
+
+GtDPlot(data.frame(prop.table(table(dataset_filt$Len, dataset_filt$Rem_comp), 1))[data.frame(prop.table(table(dataset_filt$Len, dataset_filt$Rem_comp), 1))$Var2 == 1, ], 'Var1', 'Freq', group = '', facet.wrap = ''
+        , title = 'Proportion of Commencements with at Least One Remote Contact Compliance', labels.text.size = 4, round = 2, xlab = 'Length of Sentence')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/LenRemConComp', title_lab, '.png'), last_plot())
+
+GtDPlot(data.frame(prop.table(table(dataset_filt$Comp_con))), 'Var1', 'Freq', group = '', facet.wrap = ''
+        , title = 'Proportion of Commencements Complying With Face to Face Contacts', labels.text.size = 4, round = 2, xlab = 'Number of Face to Face Contacts Complied With')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/FFCompNum', title_lab, '.png'), last_plot())
+
+GtDPlot(data.frame(prop.table(table(dataset_filt$Len, dataset_filt$Comp_con), 1)), 'Var2', 'Freq', group = '', facet.wrap = 'Var1'
+        , title = 'Proportion of Commencements Complying With Face to Face Contacts by Length of Sentence', labels.text.size = 4, round = 2, xlab = 'Number of Face to Face Contacts Complied With') +
+  theme(axis.text.x = element_text(angle = 70, vjust = 0.7)) 
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/FFCompNumSentence', title_lab, '.png'), last_plot())
+
+GtDPlot(data.frame(prop.table(table(dataset_filt$Comp_Nocon))), 'Var1', 'Freq', group = '', facet.wrap = ''
+        , title = 'Proportion of Commencements Not Complying With Face to Face Contacts', labels.text.size = 4, round = 2, xlab = 'Number of Face to Face Contacts Not Complied With')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/FFNoCompNum', title_lab, '.png'), last_plot())
+
+GtDPlot(data.frame(prop.table(table(dataset_filt$Len, dataset_filt$Comp_Nocon), 1)), 'Var2', 'Freq', group = '', facet.wrap = 'Var1'
+        , title = 'Proportion of Commencements Not Complying With Face to Face Contacts by Length of Sentence', labels.text.size = 4, round = 2, xlab = 'Number of Face to Face Contacts Not Complied With') +
+  theme(axis.text.x = element_text(angle = 70, vjust = 0.7)) 
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/FFNoCompNumSentence', title_lab, '.png'), last_plot())
+
+### cumulative proportions within 1 month
+tot <- dataset_filt[dataset_filt$FF_comp > -1 & !is.na(dataset_filt$Len), c('Len', 'NoComp_1')] %>%
+  count(Len, NoComp_1) 
+tot <- data.frame(tot[tot$NoComp_1 == 1, c('Len', 'n')])
+tot <- tot[!tot$Len == 'Check', ]
+tot <- tot %>% mutate(c_tot = cumsum(n))
+
+all <- data.frame(table(dataset_filt[dataset_filt$FF_comp > -1 & !is.na(dataset_filt$Len), 'Len']))
+all <- all[!all$Var1 == 'Check', ]
+all <- all %>% mutate(a_tot = cumsum(Freq))
+
+all <- cbind(tot, all)
+all$Prop <- all$c_tot / all$a_tot
+
+
+all$Var1 <- paste0('Up to ', all$Var1)
+all$Var1[1] <- '1 Month'
+all$Var1[7] <- 'Overall'
+all$Var1 <- factor(all$Var1, levels = c('1 Month', 'Up to 2 Months', 'Up to 3 Months', 'Up to 6 Months'
+                                                        ,'Up to 1 Year', 'Up to 2 Years', 'Overall'))
+
+GtDPlot(all, 'Var1', 'Prop', group = '', facet.wrap = ''
+        , title = 'Proportion of Commencements Having Non-Compliance with Face to Face Contact Within 1 Month', labels.text.size = 4, round = 2, xlab = 'Length of Sentence')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/LenNonComp1_cu', title_lab, '.png'), last_plot())
+
+# within 2 months
+tot <- dataset_filt[dataset_filt$FF_comp > -1 & !is.na(dataset_filt$Len), c('Len', 'NoComp_2')] %>%
+  count(Len, NoComp_2) 
+tot <- data.frame(tot[tot$NoComp_2 == 1, c('Len', 'n')])
+tot <- tot[!(tot$Len == 'Check' | tot$Len == '1 Month'), ]
+tot <- tot %>% mutate(c_tot = cumsum(n))
+
+all <- data.frame(table(dataset_filt[dataset_filt$FF_comp > -1 & !is.na(dataset_filt$Len), 'Len']))
+all <- all[!(all$Var1 == 'Check' | all$Var1 == '1 Month'), ]
+all <- all %>% mutate(a_tot = cumsum(Freq))
+
+all <- cbind(tot, all)
+all$Prop <- all$c_tot / all$a_tot
+all$Var1 <- paste0('Up to ', all$Var1)
+all$Var1[1] <- '2 Months'
+all$Var1[6] <- 'Overall'
+all$Var1 <- factor(all$Var1, levels = c('2 Months', 'Up to 3 Months', 'Up to 6 Months'
+                                        ,'Up to 1 Year', 'Up to 2 Years', 'Overall'))
+
+GtDPlot(all, 'Var1', 'Prop', group = '', facet.wrap = ''
+        , title = 'Proportion of Commencements Having Non-Compliance with Face to Face Contact Within 2 Months', labels.text.size = 4, round = 2, xlab = 'Length of Sentence')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/LenNonComp2_cu', title_lab, '.png'), last_plot())
+
+## within 3 months
+tot <- dataset_filt[dataset_filt$FF_comp > -1 & !is.na(dataset_filt$Len), c('Len', 'NoComp_3')] %>%
+  count(Len, NoComp_3) 
+tot <- data.frame(tot[tot$NoComp_3 == 1, c('Len', 'n')])
+tot <- tot[!(tot$Len == 'Check' | tot$Len == '1 Month' | tot$Len == '2 Months'), ]
+tot <- tot %>% mutate(c_tot = cumsum(n))
+
+all <- data.frame(table(dataset_filt[dataset_filt$FF_comp > -1 & !is.na(dataset_filt$Len), 'Len']))
+all <- all[!(all$Var1 == 'Check' | all$Var1 == '1 Month' | all$Var1 == '2 Months'), ]
+all <- all %>% mutate(a_tot = cumsum(Freq))
+
+all <- cbind(tot, all)
+all$Prop <- all$c_tot / all$a_tot
+all$Var1 <- paste0('Up to ', all$Var1)
+all$Var1[1] <- '3 Months'
+all$Var1[5] <- 'Overall'
+all$Var1 <- factor(all$Var1, levels = c('3 Months', 'Up to 6 Months'
+                                        ,'Up to 1 Year', 'Up to 2 Years', 'Overall'))
+
+GtDPlot(all, 'Var1', 'Prop', group = '', facet.wrap = ''
+        , title = 'Proportion of Commencements Having Non-Compliance with Face to Face Contact Within 3 Months', labels.text.size = 4, round = 2, xlab = 'Length of Sentence')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/LenNonComp3_cu', title_lab, '.png'), last_plot())
+
+### referrals existing and complying with (exclude Hants)
+
+GtDPlot(data.frame(prop.table(table(dataset_filt$Ref_All[dataset_filt$Sentence != 'Caution'], dataset_filt$yot_name[dataset_filt$Sentence != 'Caution']), 2)), 'Var1', 'Freq', group = '', facet.wrap = 'Var2'
+        , title = 'Proportion of Commencements with Referrals listed (ex. cautions)', labels.text.size = 4, round = 2, xlab = 'Status')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/other_int_exist_yot', title_lab, '.png'), last_plot())
+
+
+#####################################################################################################
+### Intervention and Control Matching Process
+M.form <- as.formula(paste0(paste('Assessment', YPcols, sep = ' ~ '), ' + Length'))
+
+#colSums(is.na(dataset_filt))
+
+set.seed(21212545)
+yp.matching.hc <- matchit(M.form, dataset_filt, ratio = 3, caliper = 0.25, exact = c('yot_name'), verbose ='TRUE')
+
+summ <- summary(yp.matching.hc, standardize = TRUE)
+summ[[2]]
+write.csv(summ[[4]], file = 'F:/Asset Plus/Output.csv')
+
+#rm(list = setdiff(ls(), c('dataset_filt', 'yp.matching.hc', 'yp.matching.hc.data', 'Data')))
+#plot(yp.matching.hc)
+#plot(yp.matching.hc, type = 'hist')
+#plot(yp.matching.hc, type = 'jitter')
+
+matchdata <- match.data(yp.matching.hc)
+matchdata$RecID <- rownames(matchdata)
+rem_hants <- matchdata$RecID[matchdata$yot_name == 'Hampshire']
+
+mm <- yp.matching.hc$match.matrix
+tx <- as.numeric(row.names(mm))
+m <- cbind(tx, as.numeric(mm))
+m <- data.frame(m)
+m <- m[!is.na(m$V2), ] ## remove those not matched
+
+names(m) <- c('Int_ID', 'Con_ID')
+
+## get weights and remandflag
+extra <- names(dataset_filt)[which(names(dataset_filt) == 'Int_comp'):which(names(dataset_filt) == 'Ref_All')]
+id_link <- unique(matchdata[, c('RecID', 'weights', extra, 'Complete', 'yot_name')])
+id_link_flags <- id_link[, c('RecID', 'weights', 'Int_comp', 'FF_comp', 'Rem_comp', 'Ref_comp', 'NoComp_1', 'NoComp_2', 'NoComp_3', 'Complete', 'yot_name')]
+
+match_link <- merge(m, id_link_flags, by.x = 'Int_ID', by.y = 'RecID', all.x = T)
+match_link <- merge(match_link, id_link_flags, by.x = 'Con_ID', by.y = 'RecID', all.x = T)
+match_link$weight <-  match_link$weights.y
+match_link$YOT <- match_link$yot_name.y
+
+## rate of completion
+a <- sum(ifelse(match_link$Complete.x == 1 & match_link$Complete.y == 1, match_link$weight, 0))
+b <- sum(ifelse(match_link$Complete.x == 0 & match_link$Complete.y == 1, match_link$weight, 0))
+c <- sum(ifelse(match_link$Complete.x == 1 & match_link$Complete.y == 0, match_link$weight, 0))
+d <- sum(ifelse(match_link$Complete.x == 0 & match_link$Complete.y == 0, match_link$weight, 0))
+
+mat.comp <- matrix(c(a, b, c, d), nrow = 2)
+
+mcnemar.test(mat.comp)
+
+## Asset plus rate
+match_link %>% summarise(sum(weight * Complete.x) / sum(weight))
+match_link %>% group_by(YOT) %>% summarise(sum(weight * Complete.x) / sum(weight))
+
+## Control rate
+match_link %>% summarise(sum(weight * Complete.y) / sum(weight))
+match_link %>% group_by(YOT) %>% summarise(sum(weight * Complete.y) / sum(weight))
+
+## rate of compliance for other interventions
+a <- sum(ifelse(match_link$Int_comp.x == 1 & match_link$Int_comp.y == 1, match_link$weight, 0))
+b <- sum(ifelse(match_link$Int_comp.x == 0 & match_link$Int_comp.y == 1, match_link$weight, 0))
+c <- sum(ifelse(match_link$Int_comp.x == 1 & match_link$Int_comp.y == 0, match_link$weight, 0))
+d <- sum(ifelse(match_link$Int_comp.x == 0 & match_link$Int_comp.y == 0, match_link$weight, 0))
+
+mat.comp.other <- matrix(c(a, b, c, d), nrow = 2)
+
+mcnemar.test(mat.comp.other)
+
+## Asset plus rate
+match_link %>% summarise(sum(weight * Int_comp.x) / sum(weight))
+## Control rate
+match_link %>% summarise(sum(weight * Int_comp.y) / sum(weight))
+
+
+## rate of compliance for face to face contacts
+a <- sum(ifelse(match_link$FF_comp.x == 1 & match_link$FF_comp.y == 1, match_link$weight, 0))
+b <- sum(ifelse(match_link$FF_comp.x == 0 & match_link$FF_comp.y == 1, match_link$weight, 0))
+c <- sum(ifelse(match_link$FF_comp.x == 1 & match_link$FF_comp.y == 0, match_link$weight, 0))
+d <- sum(ifelse(match_link$FF_comp.x == 0 & match_link$FF_comp.y == 0, match_link$weight, 0))
+
+mat.ff <- matrix(c(a, b, c, d), nrow = 2)
+
+mcnemar.test(mat.ff)
+
+## Asset plus rate
+match_link %>% summarise(sum(weight * FF_comp.x) / sum(weight))
+## control rate
+match_link %>% summarise(sum(weight * FF_comp.y) / sum(weight))
+
+
+## rate of compliance for remote contacts
+a <- sum(ifelse(match_link$Rem_comp.x == 1 & match_link$Rem_comp.y == 1, match_link$weight, 0))
+b <- sum(ifelse(match_link$Rem_comp.x == 0 & match_link$Rem_comp.y == 1, match_link$weight, 0))
+c <- sum(ifelse(match_link$Rem_comp.x == 1 & match_link$Rem_comp.y == 0, match_link$weight, 0))
+d <- sum(ifelse(match_link$Rem_comp.x == 0 & match_link$Rem_comp.y == 0, match_link$weight, 0))
+
+mat.rem <- matrix(c(a, b, c, d), nrow = 2)
+
+mcnemar.test(mat.rem)
+## Asset plus rate
+match_link %>% summarise(sum(weight * Rem_comp.x) / sum(weight))
+## Control rate
+match_link %>% summarise(sum(weight * Rem_comp.y) / sum(weight))
+
+
+## rate of compliance for referrals
+## remove Hants
+match_link_ref <- match_link[!match_link$Con_ID %in% rem_hants, ]
+match_link_ref <- match_link_ref[!match_link_ref$Int_ID %in% rem_hants, ]
+
+a <- sum(ifelse(match_link_ref$Ref_comp.x == 1 & match_link_ref$Ref_comp.y == 1, match_link_ref$weight, 0))
+b <- sum(ifelse(match_link_ref$Ref_comp.x == 0 & match_link_ref$Ref_comp.y == 1, match_link_ref$weight, 0))
+c <- sum(ifelse(match_link_ref$Ref_comp.x == 1 & match_link_ref$Ref_comp.y == 0, match_link_ref$weight, 0))
+d <- sum(ifelse(match_link_ref$Ref_comp.x == 0 & match_link_ref$Ref_comp.y == 0, match_link_ref$weight, 0))
+
+mat.ref <- matrix(c(a, b, c, d), nrow = 2)
+
+mcnemar.test(mat.ref)
+## Asset Plus rate
+match_link %>% summarise(sum(weight * Ref_comp.x) / sum(weight))
+## Control rate
+match_link %>% summarise(sum(weight * Ref_comp.y) / sum(weight))
+
+## rate of non compliance on contact within 1 month
+a <- sum(ifelse(match_link$NoComp_1.x == 1 & match_link$NoComp_1.y == 1, match_link$weight, 0))
+b <- sum(ifelse(match_link$NoComp_1.x == 0 & match_link$NoComp_1.y == 1, match_link$weight, 0))
+c <- sum(ifelse(match_link$NoComp_1.x == 1 & match_link$NoComp_1.y == 0, match_link$weight, 0))
+d <- sum(ifelse(match_link$NoComp_1.x == 0 & match_link$NoComp_1.y == 0, match_link$weight, 0))
+
+mat.NoComp_1 <- matrix(c(a, b, c, d), nrow = 2)
+
+mcnemar.test(mat.NoComp_1)
+
+## Asset plus rate
+match_link %>% summarise(sum(weight * NoComp_1.x) / sum(weight))
+match_link %>% group_by(YOT) %>% summarise(sum(weight * NoComp_1.x) / sum(weight))
+
+## Control rate
+match_link %>% summarise(sum(weight * NoComp_1.y) / sum(weight))
+match_link %>% group_by(YOT) %>% summarise(sum(weight * NoComp_1.y) / sum(weight))
+
+## rate of non compliance on contact within 2 month
+a <- sum(ifelse(match_link$NoComp_2.x == 1 & match_link$NoComp_2.y == 1, match_link$weight, 0))
+b <- sum(ifelse(match_link$NoComp_2.x == 0 & match_link$NoComp_2.y == 1, match_link$weight, 0))
+c <- sum(ifelse(match_link$NoComp_2.x == 1 & match_link$NoComp_2.y == 0, match_link$weight, 0))
+d <- sum(ifelse(match_link$NoComp_2.x == 0 & match_link$NoComp_2.y == 0, match_link$weight, 0))
+
+mat.NoComp_2 <- matrix(c(a, b, c, d), nrow = 2)
+
+mcnemar.test(mat.NoComp_2)
+
+## Asset plus rate
+match_link %>% summarise(sum(weight * NoComp_2.x) / sum(weight))
+match_link %>% group_by(YOT) %>% summarise(sum(weight * NoComp_2.x) / sum(weight))
+
+## Control rate
+match_link %>% summarise(sum(weight * NoComp_2.y) / sum(weight))
+match_link %>% group_by(YOT) %>% summarise(sum(weight * NoComp_2.y) / sum(weight))
+
+## rate of non compliance on contact within 3 month
+a <- sum(ifelse(match_link$NoComp_3.x == 1 & match_link$NoComp_3.y == 1, match_link$weight, 0))
+b <- sum(ifelse(match_link$NoComp_3.x == 0 & match_link$NoComp_3.y == 1, match_link$weight, 0))
+c <- sum(ifelse(match_link$NoComp_3.x == 1 & match_link$NoComp_3.y == 0, match_link$weight, 0))
+d <- sum(ifelse(match_link$NoComp_3.x == 0 & match_link$NoComp_3.y == 0, match_link$weight, 0))
+
+mat.NoComp_3 <- matrix(c(a, b, c, d), nrow = 2)
+
+mcnemar.test(mat.NoComp_3)
+
+## Asset plus rate
+match_link %>% summarise(sum(weight * NoComp_3.x) / sum(weight))
+match_link %>% group_by(YOT) %>% summarise(sum(weight * NoComp_3.x) / sum(weight))
+
+## Control rate
+match_link %>% summarise(sum(weight * NoComp_3.y) / sum(weight))
+match_link %>% group_by(YOT) %>% summarise(sum(weight * NoComp_3.y) / sum(weight))
+
+###############################################################################################
+# test link
+test <- merge(Data, main_int, by.x = c('currentyotid', 'commencement_date', 'Sentence')
+                            , by.y = c('Child.ID', 'Start.Date', 'Int_Cat'), all.x = T)
+
+## duplications
+check_dup <- test[duplicated(test[, c('currentyotid', 'commencement_date', 'Sentence')]), ]
+
+## add in date range method
+day_range <- 90
+if(day_range > 0) {
+  
+  Int_link2$Start_DateA <- Int_link2$Start_Date - 30
+  Int_link2$Start_DateB <- Int_link2$Start_Date + 90
+  
+  extra_SQL_test <- 'SELECT c.*, i.Complete
+                FROM Data c
+                LEFT JOIN Int_link2 i
+                ON c.currentyotid = i.Child_ID AND c.Sentence = i.Int_Cat
+                WHERE c.commencement_date BETWEEN i.Start_DateA AND i.Start_DateB
+                AND c.commencement_date <> i.Start_Date
+                GROUP BY c.currentyotid, c.commencement_date'
+  
+  Extra_match_test <- sqldf(extra_SQL_test)
+  test$Complete[test$RecID %in% Extra_match_test$RecID] <- Extra_match_test$Complete
+} 
+
+check_dup <- test[duplicated(test[, c('currentyotid', 'commencement_date', 'Sentence')]), ]
+
+test$Match <- 'Matched'
+test$Match[is.na(test$Complete)] <- 'Not matched'
+
+test <- test[test$Sentence != 'Other' & test$Sentence != 'Caution', ]
+
+check_for_match <- test[test$Match == 'Not matched', ]
+
+#View(check_for_match[check_for_match$yot_name == 'Manchester', c('currentyotid', 'commencement_date', 'Sentence')])
+#Interventions[Interventions$YOT == 'Norfolk' & !(Interventions$Child.ID %in% test$currentyotid), ]
+#check_for_match[check_for_match$yot_name == 'West Mercia', 'currentyotid'][1:5]
+#View(Interventions[Interventions$Child.ID == '1784740MM', ])
+
+## chart matches
+GtDPlot(data.frame(prop.table(table(test$yot_name, test$Match), 1)), 'Var2', 'Freq', group = '', facet.wrap = 'Var1'
+        , title = 'Proportion of records linking', labels.text.size = 4, round = 3, xlab = 'YOT')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/YOT_Links', title_lab, '.png'), last_plot())
+
+GtDPlot(data.frame(prop.table(table(test$Year, test$Match), 1)), 'Var2', 'Freq', group = '', facet.wrap = 'Var1'
+        , title = 'Proportion of records linking', labels.text.size = 4, round = 2, xlab = 'Year')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Year_Links', title_lab, '.png'), last_plot())
+
+GtDPlot(data.frame(prop.table(table(test$Sentence, test$Match), 1)), 'Var2', 'Freq', group = '', facet.wrap = 'Var1'
+        , title = 'Proportion of records linking', labels.text.size = 4, round = 2, xlab = 'Sentence')
+ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Sentence_Links', title_lab, '.png'), last_plot())
+
+for (i in unique(test$yot_name)){
+  
+  chart_data <- test[test$yot_name == i, ]
+  GtDPlot(data.frame(prop.table(table(chart_data$Sentence, chart_data$Match), 1)), 'Var2', 'Freq', group = '', facet.wrap = 'Var1'
+          , title = paste0('Proportion of records linking in ', i), labels.text.size = 4, round = 2, xlab = 'Sentence')
+  ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/YOT_Sentence_Links', title_lab, '-', i, '.png'), last_plot())
+}
+
+### who are those not matched
+ChartBase <- test %>% select(RecID, Assessment, Match) %>% group_by(Assessment, Match) %>% summarise(Freq = length(RecID))
+test$offence_seriousness_score <- as.character(test$offence_seriousness_score)
+
+chart <- list()
+j <- 1
+
+table(test$number_of_previous_orders, test$Assessment)
+test$Previous_orders <- ifelse(test$number_of_previous_orders == 0, 'None', ifelse(test$number_of_previous_orders == 1, 'One'
+                                                                                   , 'More than one'))
+test$Previous_orders <- factor(test$Previous_orders, levels = c('None', 'One', 'More than one'))
+
+demographic_fields <- c('Asian.or.Asian.British', 'Black.or.Black.British', 'Chinese.or.Other.Ethnic.Group'
+                        , 'Information.not.obtainable', 'Mixed', 'Other.Ethnic.Group', 'Unknown.Ethnicity', 'White')
+
+Offence_fields <- c('ARSON', 'CRIMINAL_DAMAGE', 'DEATH_OR_INJURY_BY_DANGEROUS_DRIVING', 'DOMESTIC_BURGLARY'
+                    , 'DRUGS', 'FRAUD_AND_FORGERY', 'MOTORING_OFFENCES', 'NON_DOMESTIC_BURGLARY', 'NOT_KNOWN'
+                    , 'OTHER', 'PUBLIC_ORDER', 'RACIALLY_AGGRAVATED', 'ROBBERY', 'SEXUAL_OFFENCES'
+                    , 'THEFT_AND_HANDLING_STOLEN_GOODS', 'VEHICLE_THEFT_UNAUTHORISED_TAKING', 'VIOLENCE_AGAINST_THE_PERSON')
+
+for (i in c('gender', 'court_type', 'offence_seriousness_score', 'knife_related_offence', 'yot_name'
+            , 'Previous_orders', 'Sentence'))
+{
+  
+  fieldName <- sym(i)
+  title <- paste0('Matched data by - ', fieldName)
+  file <- paste0('F:/Asset Plus/Analysis/Charts/YOTs/Matched_count', fieldName, '.png')
+  
+  chart[[j]] <- data.frame(test %>% select(RecID, Assessment, !!fieldName, Match) %>% group_by(Assessment, !!fieldName, Match) %>% 
+                             summarise(Freq = length(RecID)))
+  
+  chart[[j]] <- merge(chart[[j]], ChartBase, by = c('Assessment', 'Match'), all.x = TRUE)
+  chart[[j]]$Assessment <- ifelse(chart[[j]]$Assessment == 1, 'Asset Plus', 'Control')
+  chart[[j]]$Prop <- (chart[[j]]$Freq.x / chart[[j]]$Freq.y) * 100
+  chart[[j]]$Var <- i
+  chart_plot <- GtDPlot(chart[[j]], 'Assessment', 'Freq.x', group = fieldName, facet.wrap = 'Match', title = title
+                        , labels.text.size = 4)
+  ggsave(filename = file, chart_plot)
+  
+  j <- j + 1
+}
+
+chart <- list()
+j <- 1
+
+
+for (i in c(demographic_fields, Offence_fields))
+{
+  
+  fieldName <- sym(i)
+  
+  chart[[j]] <- data.frame(test %>% select(RecID, Assessment, !!fieldName, Match) %>% group_by(Assessment, !!fieldName, Match, .drop = F) %>% 
+                             summarise(Freq = length(RecID)))
+  
+  chart[[j]] <- merge(chart[[j]], ChartBase, by = c('Assessment', 'Match'), all.x = TRUE)
+  chart[[j]]$Assessment <- ifelse(chart[[j]]$Assessment == 1, 'Asset Plus', 'Control')
+  chart[[j]]$Prop <- (chart[[j]]$Freq.x / chart[[j]]$Freq.y) * 100
+  chart[[j]]$Var <- i
+  
+  names(chart[[j]])[which(names(chart[[j]]) == i)] <- 'Resp'
+  
+  j <- j + 1
+}
+
+demo_data <- bind_rows(chart)
+demo_data <- demo_data[demo_data$Resp == 1, ]
+
+GtDPlot(demo_data[demo_data$Var %in% demographic_fields, ], 'Assessment', 'Prop', group = 'Var', facet.wrap = 'Match'
+        , title = 'Proportion of records in matching process', labels.text.size = 4)
+ggsave(filename = 'F:/Asset Plus/Analysis/Charts/YOTs/Matched_Ethnicity.png', last_plot())
+
+Offence_fields2 <- c('CRIMINAL_DAMAGE', 'DRUGS', 'PUBLIC_ORDER', 'THEFT_AND_HANDLING_STOLEN_GOODS'
+                     , 'VIOLENCE_AGAINST_THE_PERSON')
+
+GtDPlot(demo_data[demo_data$Var %in% Offence_fields2, ], 'Assessment', 'Prop', group = 'Var', facet.wrap = 'Match'
+        , title = 'Proportion of records in matching process', labels.text.size = 4) 
+ggsave(filename = 'F:/Asset Plus/Analysis/Charts/YOTs/Matched_Offence.png', last_plot())
+
+
+save.image(file = 'F:/Asset Plus/Data/YOT_Data/YOT.RData')
+
+#####################################################################################################
+## Checking ID fields
+## numbers of IDs with letters on the end
+to_investigate <- Interventions[Interventions$Main == 1 & !(Interventions$Child.ID %in% Data), ]
+
+nrow(to_investigate[to_investigate$YOT == 'Norfolk', ])
+sum(grepl('.FN$', to_investigate$Child.ID[to_investigate$YOT == 'Norfolk'])) / nrow(to_investigate[to_investigate$YOT == 'Norfolk', ])
+sum(grepl('.FN$', Data$currentyotid[Data$yot_name == 'Norfolk'])) / nrow(Data[Data$yot_name == 'Norfolk', ])
+
+sum(grepl('.BB$', to_investigate$Child.ID[to_investigate$YOT == 'Bath'])) / nrow(to_investigate[to_investigate$YOT == 'Bath', ])
+sum(grepl('.BB$', Data$currentyotid[Data$yot_name == 'Bath and North East Somerset'])) / nrow(Data[Data$yot_name == 'Bath and North East Somerset', ])
+
+nrow(to_investigate[to_investigate$YOT == 'Middlesbrough', ])
+sum(grepl('.SS$', to_investigate$Child.ID[to_investigate$YOT == 'Middlesbrough'])) / nrow(to_investigate[to_investigate$YOT == 'Middlesbrough', ])
+sum(grepl('.SS$', Data$currentyotid[Data$yot_name == 'South Tees'])) / nrow(Data[Data$yot_name == 'South Tees', ])
+
+nrow(to_investigate[to_investigate$YOT == 'Bedford', ])
+sum(grepl('.FE$', to_investigate$Child.ID[to_investigate$YOT == 'Bedford'])) / nrow(to_investigate[to_investigate$YOT == 'Bedford', ])
+sum(grepl('.FE$', Data$currentyotid[Data$yot_name == 'Bedfordshire'])) / nrow(Data[Data$yot_name == 'Bedfordshire', ])
+
+nrow(to_investigate[to_investigate$YOT == 'Carmarthen', ])
+sum(grepl('.WC$', to_investigate$Child.ID[to_investigate$YOT == 'Carmarthen'])) / nrow(to_investigate[to_investigate$YOT == 'Carmarthen', ])
+sum(grepl('.WC$', Data$currentyotid[Data$yot_name == 'Carmarthenshire'])) / nrow(Data[Data$yot_name == 'Carmarthenshire', ])
+
+nrow(to_investigate[to_investigate$YOT == 'Enfield', ])
+sum(grepl('.LF$', to_investigate$Child.ID[to_investigate$YOT == 'Enfield'])) / nrow(to_investigate[to_investigate$YOT == 'Enfield', ])
+sum(grepl('.LF$', Data$currentyotid[Data$yot_name == 'Enfied'])) / nrow(Data[Data$yot_name == 'Enfield', ])
+
+## how does hants data end?
+table(substr(Interventions$Child.ID[Interventions$YOT == 'Hampshire'], nchar(Interventions$Child.ID[Interventions$YOT == 'Hampshire']) - 1, nchar(Interventions$Child.ID[Interventions$YOT == 'Hampshire'])))
+table(Data$yot_name)
+nrow(to_investigate[to_investigate$YOT == 'West Mercia', ])
+sum(grepl('.WW$', to_investigate$Child.ID[to_investigate$YOT == 'West Mercia'])) / nrow(to_investigate[to_investigate$YOT == 'West Mercia', ])
+sum(grepl('.WW$', Data$currentyotid[Data$yot_name == 'West Mercia'])) / nrow(Data[Data$yot_name == 'West Mercia', ])
+
+sum(grepl('.CG$', to_investigate$Child.ID[to_investigate$YOT == 'West Mercia'])) / nrow(to_investigate[to_investigate$YOT == 'West Mercia', ])
+sum(grepl('.CG$', Data$currentyotid[Data$yot_name == 'West Mercia'])) / nrow(Data[Data$yot_name == 'West Mercia', ])
+
+linked_ids <- unique(test[test$Match == 'Matched', c('currentyotid', 'yot_name')])
+in_intervention <- Interventions[Interventions$Child.ID %in% linked_ids$currentyotid & Interventions$Main == 1, ]
+not_in_intervention <- Interventions[(!Interventions$Child.ID %in% linked_ids$currentyotid) & 
+                                       Interventions$Main == 1 & Interventions$Start.Date <= max(Data$commencement_date), ]
+
+
+#####################################################################################################
+## YOT description
+
+GtDPlot(data.frame(table(Contacts$YOT)), 'Var1', 'Freq', xlab = 'YOT', ylab = 'Number'
+        , title = 'Contact records shared', labels.text.size = 4)
+ggsave(filename = 'F:/Asset Plus/Analysis/Charts/YOTs/Contact_recs.png', last_plot())
+
+GtDPlot(data.frame(table(Interventions$YOT)), 'Var1', 'Freq', xlab = 'YOT', ylab = 'Number'
+        , title = 'Intervention records shared', labels.text.size = 4)
+ggsave(filename = 'F:/Asset Plus/Analysis/Charts/YOTs/Intervention_recs.png', last_plot())
+
+GtDPlot(data.frame(table(Referrals$YOT)), 'Var1', 'Freq', xlab = 'YOT', ylab = 'Number'
+        , title = 'Referral records shared', labels.text.size = 4)
+ggsave(filename = 'F:/Asset Plus/Analysis/Charts/YOTs/Referral_recs.png', last_plot())
+
+
+Con_time <- Contacts %>% group_by(floor_date(Contacts$Contact.Date, 'month'), YOT) %>%
+  summarise(Records = length(Contact.ID))
+names(Con_time)[1] <- 'Month'
+Con_time <- Con_time[!is.na(Con_time$Month), ]
+
+Con_time <- Con_time[Con_time$Month >= '2013-01-01' & Con_time$Month <= '2019-07-01', ]
+
+Int_time <- Interventions %>% group_by(floor_date(Interventions$Start.Date, 'month'), YOT) %>%
+  summarise(Records = length(Intervention.ID))
+names(Int_time)[1] <- 'Month'
+
+Int_time <- Int_time[!is.na(Int_time$Month), ]
+Int_time <- Int_time[Int_time$Month >= '2013-01-01' & Int_time$Month <= '2019-07-01', ]
+
+Ref_time <- Referrals %>% group_by(floor_date(Referrals$Referral.Date, 'month'), YOT) %>%
+  summarise(Records = length(Referral.ID))
+names(Ref_time)[1] <- 'Month'
+
+Ref_time <- Ref_time[!is.na(Ref_time$Month), ]
+Ref_time <- Ref_time[Ref_time$Month >= '2013-01-01' & Ref_time$Month <= '2019-07-01', ]
+
+## types of record
+Int_chart_type <- data.frame(table(Interventions$Intervention.Type, Interventions$YOT))
+Int_chart_type <- Int_chart_type[Int_chart_type$Freq != 0, ]
+
+Con_chart_type <- data.frame(table(Contacts$Contact.Type, Contacts$YOT))
+Con_chart_type <- Con_chart_type[Con_chart_type$Freq != 0, ]
+
+Ref_chart_type <- data.frame(table(Referrals$Referral.Category, Referrals$YOT))
+Ref_chart_type <- Ref_chart_type[Ref_chart_type$Freq != 0, ]
+Ref_chart_type$Var1 <- as.character(Ref_chart_type$Var1)
+Ref_chart_type$Var1[Ref_chart_type$Var1 == ''] <- 'Not recorded'
+
+## completions/ compliance
+int_completed <- data.frame(table(floor_date(Interventions$End.Date, 'month'), Interventions$YOT))
+int_completed_comp <- data.frame(table(floor_date(Interventions[Interventions$Complete == 1, 'End.Date'], 'month')
+                                       , Interventions[Interventions$Complete == 1, 'YOT']))
+int_completed <- merge(int_completed, int_completed_comp, by = c('Var1', 'Var2'), all.x = T)
+int_completed$Prop <- int_completed$Freq.y / int_completed$Freq.x
+int_completed$Prop[is.na(int_completed$Prop)] <- 0
+int_completed$Var1 <- ymd(int_completed$Var1)
+int_completed <- int_completed[int_completed$Var1 >= '2013-01-01' & int_completed$Var1 <= '2019-07-01', ]
+
+con_completed <- data.frame(table(floor_date(Contacts[Contacts$Complied == 1, 'Contact.Date'], 'month')
+                                  , Contacts[Contacts$Complied == 1, 'YOT']))
+con_completed$Var1 <- ymd(con_completed$Var1)
+con_completed$Var2 <- as.character(con_completed$Var2)
+con_completed <- merge(con_completed, Con_time, by.x = c('Var1', 'Var2'), by.y = c('Month', 'YOT'))
+con_completed$Prop <- con_completed$Freq / con_completed$Records
+
+## individual YOTs
+YOT_chart <- unique(Interventions$YOT)
+
+for(i in YOT_chart){
+  
+  con_data <- Con_time[Con_time$YOT == i, ]
+  int_data <- Int_time[Int_time$YOT == i, ]
+  ref_data <- Ref_time[Ref_time$YOT == i, ]
+  
+  int_type_data <- Int_chart_type[Int_chart_type$Var2 == i, ]
+  int_type_data <- int_type_data[int_type_data$Freq >= 50, ]
+
+  con_type_data <- Con_chart_type[Con_chart_type$Var2 == i, ]  
+  con_type_data <- con_type_data[con_type_data$Freq >= 1000, ]
+
+  ref_type_data <- Ref_chart_type[Ref_chart_type$Var2 == i, ]  
+  ref_type_data <- ref_type_data[ref_type_data$Freq >= 10, ]
+
+  int_comp_data <- int_completed[int_completed$Var2 == i, ]
+  con_comp_data <- con_completed[con_completed$Var2 == i, ]
+  
+  GtDline(con_data, 'Month', 'Records', Group = 'YOT', xlab = 'Date', ylab = 'Number'
+          , title = paste0('Contacts made in ', i)) + theme(legend.position = 'none')
+  ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/contactrec-', i, '.png'), last_plot())
+  
+  GtDline(int_data, 'Month', 'Records', Group = 'YOT', xlab = 'Date', ylab = 'Number'
+          , title = paste0('Intervention starts in ', i)) + theme(legend.position = 'none')
+  ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Interventionrec-', i, '.png'), last_plot())
+  
+  GtDline(ref_data, 'Month', 'Records', Group = 'YOT', xlab = 'Date', ylab = 'Number'
+          , title = paste0('Referrals made in ', i)) + theme(legend.position = 'none')
+  ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/Referralrec-', i, '.png'), last_plot())
+
+  GtDPlot(con_type_data,  'Var1', 'Freq', xlab = 'Contact Type (most common only)', ylab = 'Number'
+          , title = paste0('Contact records shared - ', i), labels.text.size = 4) + 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+  ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/ContactType-', i, '.png'), last_plot())
+  
+  GtDPlot(int_type_data,  'Var1', 'Freq', xlab = 'Intervention Type (most common only)', ylab = 'Number'
+          , title = paste0('Intervention records shared - ', i), labels.text.size = 4) + 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+  ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/InterType-', i, '.png'), last_plot())
+
+  GtDPlot(ref_type_data,  'Var1', 'Freq', xlab = 'Referral Type (most common only)', ylab = 'Number'
+          , title = paste0('Referral records shared - ', i), labels.text.size = 4) + 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+  ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/ReferralType-', i, '.png'), last_plot())
+  
+  GtDline(con_comp_data, 'Var1', 'Prop', Group = 'Var2', xlab = 'Date', ylab = 'Proportion'
+          , title = paste0('Proportion of contacts complied with in ', i)) + theme(legend.position = 'none')
+  ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/ContactComp-', i, '.png'), last_plot())
+  
+  GtDline(int_comp_data, 'Var1', 'Prop', Group = 'Var2', xlab = 'Date', ylab = 'Proportion'
+          , title = paste0('Proportion of interventions completed in ', i)) + theme(legend.position = 'none')
+  ggsave(filename = paste0('F:/Asset Plus/Analysis/Charts/YOTs/InterventionComp-', i, '.png'), last_plot())
+  
+} 
+
+
+#####################################################################################################
+## forest plots
+OR <- rbind(
+  odds.ratio(mat.comp, level = 0.95),
+  odds.ratio(mat.comp.other, level = 0.95),
+  odds.ratio(mat.ff, level = 0.95),
+  odds.ratio(mat.rem, level = 0.95),
+  odds.ratio(mat.ref, level = 0.95),
+  odds.ratio(mat.NoComp_1, level = 0.95),
+  odds.ratio(mat.NoComp_2, level = 0.95),
+  odds.ratio(mat.NoComp_3, level = 0.95)
+)
+
+OR$Type <- c('Completion', 'Other Completion', 'Face to Face Compliance', 'Remote Compliance'
+             , 'Referral Compliance', 'Non compliance within 1 month', 'Non compliance within 2 months'
+             , 'Non compliance within 3 months')
+OR$OR <- round(OR$OR, 2)
+
+forest_data <- structure(list(
+  mean = c(NA, NA, OR$OR, NA),
+  lower = c(NA, NA, OR$`2.5 %`, NA),
+  upper = c(NA, NA, OR$`97.5 %`, NA)),
+  .Names = c('mean', 'lower', 'upper'),
+  row.names = c('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'),
+  class = 'data.frame'
+)
+
+mat.comp <- round(mat.comp)
+mat.comp.other <- round(mat.comp.other)
+mat.ff <- round(mat.ff)
+mat.rem <- round(mat.rem)
+mat.ref <- round(mat.ref)
+mat.NoComp_1 <- round(mat.NoComp_1)
+mat.NoComp_2 <- round(mat.NoComp_2)
+mat.NoComp_3 <- round(mat.NoComp_3)
+
+tabletext <- cbind(
+  c('', 'Outcome', OR$Type, NA),
+  c('Number', 'Control', mat.comp[1, 1] + mat.comp[2, 1], mat.comp.other[1, 1] + mat.comp.other[2, 1],
+    mat.ff[1, 1] + mat.ff[2, 1], mat.rem[1, 1] + mat.rem[2, 1], mat.ref[1, 1] + mat.ref[2, 1],
+    mat.NoComp_1[1, 1] + mat.NoComp_1[2, 1], mat.NoComp_2[1, 1] + mat.NoComp_2[2, 1],
+    mat.NoComp_3[1, 1] + mat.NoComp_3[2, 1], NA),
+  c('Number', 'Asset Plus', mat.comp[1, 1] + mat.comp[1, 2], mat.comp.other[1, 1] + mat.comp.other[1, 2],
+    mat.ff[1, 1] + mat.ff[1, 2], mat.rem[1, 1] + mat.rem[1, 2], mat.ref[1, 1] + mat.ref[1, 2],
+    mat.NoComp_1[1, 1] + mat.NoComp_1[1, 2], mat.NoComp_2[1, 1] + mat.NoComp_2[1, 2],
+    mat.NoComp_3[1, 1] + mat.NoComp_3[1, 2], NA),
+  c('', 'OR', OR$OR, NA)
+)
+
+
+forestplot(tabletext, forest_data$mean, forest_data$lower, forest_data$upper
+           , new_page = T, is.summary = c(TRUE, TRUE, c(rep(FALSE, 8)), TRUE)
+           , clip = c(0, 5)
+           , col = fpColors(box = 'royalblue', line = 'darkblue', summary = 'royalblue'))
+
+## individual outcomes split by YOT
+##### set k manually
+
+j <- 1
+mat.comp.yot <- list()
+ORYot <- data.frame()
+k <- 'NoComp_1'
+intvar <- paste0(k, '.x')
+convar <- paste0(k, '.y')
+
+for(i in unique(match_link$YOT)){
+  
+  a <- sum(ifelse(match_link[, intvar][match_link$YOT == i] == 1 & match_link[, convar][match_link$YOT == i] == 1
+                  , match_link$weight[match_link$YOT == i], 0))
+  b <- sum(ifelse(match_link[, intvar][match_link$YOT == i] == 0 & match_link[, convar][match_link$YOT == i] == 1
+                  , match_link$weight[match_link$YOT == i], 0))
+  c <- sum(ifelse(match_link[, intvar][match_link$YOT == i] == 1 & match_link[, convar][match_link$YOT == i] == 0
+                  , match_link$weight[match_link$YOT == i], 0))
+  d <- sum(ifelse(match_link[, intvar][match_link$YOT == i] == 0 & match_link[, convar][match_link$YOT == i] == 0
+                  , match_link$weight[match_link$YOT == i], 0))
+  
+  mat.comp.yot[[j]] <- matrix(c(a, b, c, d), nrow = 2)
+  mat.comp.yot[[j]] <- round(mat.comp.yot[[j]])
+  ORYot <- rbind(ORYot, odds.ratio(mat.comp.yot[[j]]))
+  
+  j <- j + 1
+  
+}
+
+a <- sum(ifelse(match_link[, intvar] == 1 & match_link[, convar] == 1
+                , match_link$weight, 0))
+b <- sum(ifelse(match_link[, intvar] == 0 & match_link[, convar] == 1
+                , match_link$weight, 0))
+c <- sum(ifelse(match_link[, intvar] == 1 & match_link[, convar] == 0
+                , match_link$weight, 0))
+d <- sum(ifelse(match_link[, intvar] == 0 & match_link[, convar] == 0
+                , match_link$weight, 0))
+
+mat.comp.yot[[j]] <- matrix(c(a, b, c, d), nrow = 2)
+mat.comp.yot[[j]] <- round(mat.comp.yot[[j]])
+ORYot <- rbind(ORYot, odds.ratio(mat.comp.yot[[j]]))
+
+forest_data_yot <- structure(list(
+  mean = c(NA, NA, ORYot$OR, NA),
+  lower = c(NA, NA, ORYot$`2.5 %`, NA),
+  upper = c(NA, NA, ORYot$`97.5 %`, NA)),
+  .Names = c('mean', 'lower', 'upper'),
+  row.names = c('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'),
+  class = 'data.frame'
+)
+
+tabletext_yot <- cbind(
+  c('', 'YOT', unique(match_link$YOT), 'Overall', NA),
+  c(k, 'Control', mat.comp.yot[[1]][1, 1] + mat.comp.yot[[1]][2, 1], mat.comp.yot[[2]][1, 1] + mat.comp.yot[[2]][2, 1],
+    mat.comp.yot[[3]][1, 1] + mat.comp.yot[[3]][2, 1], mat.comp.yot[[4]][1, 1] + mat.comp.yot[[4]][2, 1], mat.comp.yot[[5]][1, 1] + mat.comp.yot[[5]][2, 1],
+    mat.comp.yot[[6]][1, 1] + mat.comp.yot[[6]][2, 1], mat.comp.yot[[7]][1, 1] + mat.comp.yot[[7]][2, 1], mat.comp.yot[[8]][1, 1] + mat.comp.yot[[8]][2, 1],
+    mat.comp.yot[[9]][1, 1] + mat.comp.yot[[9]][2, 1], mat.comp.yot[[10]][1, 1] + mat.comp.yot[[10]][2, 1], NA),
+  c(k, 'Asset Plus', mat.comp.yot[[1]][1, 1] + mat.comp.yot[[1]][1, 2], mat.comp.yot[[2]][1, 1] + mat.comp.yot[[2]][1, 2],
+    mat.comp.yot[[3]][1, 1] + mat.comp.yot[[3]][1, 2], mat.comp.yot[[4]][1, 1] + mat.comp.yot[[4]][1, 2], mat.comp.yot[[5]][1, 1] + mat.comp.yot[[5]][1, 2],
+    mat.comp.yot[[6]][1, 1] + mat.comp.yot[[6]][1, 2], mat.comp.yot[[7]][1, 1] + mat.comp.yot[[7]][1, 2], mat.comp.yot[[8]][1, 1] + mat.comp.yot[[8]][1, 2],
+    mat.comp.yot[[9]][1, 1] + mat.comp.yot[[9]][1, 2], mat.comp.yot[[10]][1, 1] + mat.comp.yot[[10]][1, 2], NA),
+  c('', 'OR', round(ORYot$OR, 2), NA)
+)
+
+forestplot(tabletext_yot, forest_data_yot$mean, forest_data_yot$lower, forest_data_yot$upper
+           , new_page = T, is.summary = c(TRUE, TRUE, c(rep(FALSE, 9)), TRUE, TRUE)
+           , clip = c(0, 10)
+           , col = fpColors(box = 'royalblue', line = 'darkblue', summary = 'royalblue'))
+
+#####################################################################################################
+################ expected sample sizes
+## original data
+O.num <- data.frame(table(Data[Data$Sentence %in% c('Order', 'Custodial', 'Conditional caution'), 'Assessment']))
+O.num$Var1 <- ifelse(O.num$Var1 == 0, 'Control', 'Asset Plus')
+O.num$Type <- 'Original sample'
+
+O.yot <- data.frame(table(Data[Data$Sentence %in% c('Order', 'Custodial', 'Conditional caution'), 'yot_name']))
+O.yot$Type <- 'Original sample'
+
+## linked to local YOT intervention
+L.num <- data.frame(table(dataset_filt[dataset_filt$Sentence %in% c('Order', 'Custodial', 'Conditional caution'), 'Asset']))
+L.num$Type <- 'Linked to YOT intervention'
+L.yot <- data.frame(table(dataset_filt[dataset_filt$Sentence %in% c('Order', 'Custodial', 'Conditional caution'), 'yot_name']))
+L.yot$Type <- 'Linked to YOT intervention'
+
+## with contact information
+table(dataset_filt$FF_comp)
+C.num <- data.frame(table(dataset_filt[dataset_filt$Sentence %in% c('Order', 'Custodial', 'Conditional caution') &
+                     dataset_filt$FF_comp >= 0, 'Asset']))
+C.num$Type <- 'With contact information'
+C.yot <- data.frame(table(dataset_filt[dataset_filt$Sentence %in% c('Order', 'Custodial', 'Conditional caution') &
+                     dataset_filt$FF_comp >= 0, 'yot_name']))
+C.yot$Type <- 'With contact information'
+
+## with secondary intervention information
+table(dataset_filt$Int_comp)
+I.num <- data.frame(table(dataset_filt[dataset_filt$Sentence %in% c('Order', 'Custodial', 'Conditional caution') &
+                     dataset_filt$Int_comp >= 0, 'Asset']))
+I.num$Type <- 'With multiple interventions'
+I.yot <- data.frame(table(dataset_filt[dataset_filt$Sentence %in% c('Order', 'Custodial', 'Conditional caution') &
+                     dataset_filt$Int_comp >= 0, 'yot_name'])) 
+I.yot$Type <- 'With multiple interventions'
+
+### with referral information
+table(dataset_filt$Ref_comp)
+R.num <- data.frame(table(dataset_filt[dataset_filt$Sentence %in% c('Order', 'Custodial', 'Conditional caution') &
+                     dataset_filt$Ref_comp >= 0, 'Asset']))
+R.num$Type <- 'With referral information'
+R.yot <- data.frame(table(dataset_filt[dataset_filt$Sentence %in% c('Order', 'Custodial', 'Conditional caution') &
+                     dataset_filt$Ref_comp >= 0, 'yot_name']))
+R.yot$Type <- 'With referral information'
+
+### matched with p-score matching
+M.num <- data.frame(table(matchdata[matchdata$Sentence %in% c('Order', 'Custodial', 'Conditional caution'), 'Asset']))
+M.num$Type <- 'In matched dataset'
+M.yot <- data.frame(table(matchdata[matchdata$Sentence %in% c('Order', 'Custodial', 'Conditional caution'), 'yot_name']))
+M.yot$Type <- 'In matched dataset'
+
+overview <- rbind(O.num, L.num, C.num, I.num, R.num, M.num)
+
+GtDPlot(overview,  'Var1', 'Freq', facet.wrap = 'Type',  xlab = 'Group', ylab = 'Number of records'
+        , title = 'Records shared (ex. Cautions)', labels.text.size = 4)
+ggsave(filename = 'F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/OVerallCount.png', last_plot())
+
+yot_overview <- rbind(O.yot, L.yot, C.yot, I.yot, R.yot, M.yot)
+
+yot_overview$Var1 <- gsub(' and North East Somerset', '', yot_overview$Var1)
+GtDPlot(yot_overview,  'Var1', 'Freq', facet.wrap = 'Type',  xlab = 'Group', ylab = 'Number of records'
+        , title = 'Records shared (ex. Cautions)', labels.text.size = 4) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5)) 
+ggsave(filename = 'F:/Asset Plus/Analysis/Charts/YOTs/Outcomes/OVerallYotCount.png', last_plot())
